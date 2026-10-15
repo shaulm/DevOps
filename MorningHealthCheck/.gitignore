@@ -1,0 +1,5 @@
+# Your environment - never commit these
+config/HealthCheck.config.psd1
+Credentials/
+Reports/
+Logs/
