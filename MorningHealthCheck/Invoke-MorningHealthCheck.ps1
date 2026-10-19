@@ -140,9 +140,13 @@ try {
             }
         }
 
+        # Values remembered by the previous run (e.g. when the ePO repository content last changed).
+        $lastRun = Get-PreviousRun -Folder $settings.ReportFolder
+        if ($lastRun -and $lastRun.PSObject.Properties['State']) { $settings.PreviousState = ConvertTo-HCStateTable $lastRun.State }
+
         $results = Invoke-HCAllTargets -Targets $targets -Settings $settings -ModulePath $modulePath -Sequential:$Sequential
         # A partial (-Only) run is not compared with, and does not become, the "last run".
-        $previous = if ($Only) { $null } else { Get-PreviousRun -Folder $settings.ReportFolder }
+        $previous = if ($Only) { $null } else { $lastRun }
     }
     foreach ($r in $results) {
         foreach ($line in $r.Log) { Write-Log $line }
@@ -158,7 +162,7 @@ try {
     $fullHtml = ConvertTo-HCReportHtml -Model $model -Mode Full -ShowAddresses:$showAddresses
     [System.IO.File]::WriteAllText($reportPath, $fullHtml, [System.Text.UTF8Encoding]::new($false))
     if (-not $Demo -and -not $Only) {
-        ConvertTo-HCPreviousRun -Model $model | ConvertTo-Json -Depth 6 |
+        ConvertTo-HCPreviousRun -Model $model -PreviousState $settings.PreviousState | ConvertTo-Json -Depth 8 |
             Set-Content -LiteralPath (Join-Path $settings.ReportFolder "$baseName.json") -Encoding utf8
     }
     Write-Log "Report saved to $reportPath"

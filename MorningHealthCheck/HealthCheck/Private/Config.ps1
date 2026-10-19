@@ -74,6 +74,7 @@ function New-HCSettings {
         LogFolder        = & $resolve $g.LogFolder 'Logs'
         CredentialFolder = & $resolve $g.CredentialFolder 'Credentials'
         Credentials      = @{}
+        PreviousState    = @{}      # "Type|Name" -> @{ Key = @{ Value; Since } } from the previous run
     }
 }
 

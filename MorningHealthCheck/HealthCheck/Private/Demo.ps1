@@ -235,12 +235,15 @@ function New-HCDemoResults {
     $results.Add($ctx)
 
     $ctx = & $new 'TrellixEPO' 'EPO01' 'epo01.contoso.local'
-    Set-HCFact $ctx 'ePO' '5.10.0'; Set-HCFact $ctx 'Systems' '1,532'; Set-HCFact $ctx 'OS' 'Server 2019 Standard'
+    Set-HCFact $ctx 'ePO' '5.10.0'; Set-HCFact $ctx 'Systems' '1,532'; Set-HCFact $ctx 'Signatures' '92.9% current'; Set-HCFact $ctx 'Repository' 'AMCore content 5321.0'
+    $yesterday = (Get-Date).AddDays(-1).ToString('dd MMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
     Add-HCDemoChecks $ctx @(
         , @('TCP ports', 'OK', 'Open: 8443, 443')
         , @('ePO Web API', 'OK', 'Responding (version 5.10.0)')
         , @('Agent communication', 'OK', '1,532 managed systems, 41 not seen for more than 7 days (2.7%)')
-        , @('Systems with AMCore content older than 3 days', 'Warning', '64 result row(s)')
+        , @('Signatures (AMCore content)', 'Warning', '109 of 1,532 systems (7.1%) have content older than 3 days; oldest: LAB-PC07 (19 d), KIOSK-02 (12 d), SALES-LT22 (9 d), WH-SCAN03 (8 d), HR-LT11 (6 d) (+104 more)')
+        , @('Newest content in use', 'OK', "AMCore content dated $yesterday (1 day old), version 5321")
+        , @('Master repository content', 'OK', 'AMCore content 5321.0 (Current branch)')
         , @('Services', 'OK', 'All 5 monitored services running')
         , @('Disk space', 'OK', 'C: 41% free, D: 66% free')
     )

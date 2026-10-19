@@ -302,6 +302,61 @@ Assert 'config: Address derived from Url' { (@(Resolve-HCTargets -Config $cfg))[
 $example = Import-HCConfig -Path (Join-Path $PSScriptRoot '../config/HealthCheck.config.example.psd1')
 Assert 'config: example file is valid' { @(Resolve-HCTargets -Config $example).Count -gt 10 }
 
+# --------------------------------------------------------------------------------------------- ePO signatures
+Assert 'content version: string' { (ConvertTo-HCContentVersion '5321.0') -eq 5321 -and (ConvertTo-HCContentVersion '9876.0000') -eq 9876 }
+Assert 'content version: number' { (ConvertTo-HCContentVersion 5321) -eq 5321 -and (ConvertTo-HCContentVersion 5321.7) -eq 5321 }
+Assert 'content version: invalid' { $null -eq (ConvertTo-HCContentVersion 'n/a') -and $null -eq (ConvertTo-HCContentVersion $null) }
+
+$day = { param($n) (Get-Date).Date.AddDays(-$n).AddHours(2) }
+$rows = @(
+    1..7 | ForEach-Object { [pscustomobject]@{ 'EPOLeafNode.NodeName' = "PC$_"; 'EPOLeafNode.LastUpdate' = (Get-Date); 'AM_CustomProps.AMCoreContentDate' = (& $day 1) } }
+    [pscustomobject]@{ 'EPOLeafNode.NodeName' = 'OLD5A'; 'EPOLeafNode.LastUpdate' = (Get-Date); 'AM_CustomProps.AMCoreContentDate' = (& $day 5).ToString('o') }
+    [pscustomobject]@{ 'EPOLeafNode.NodeName' = 'OLD5B'; 'EPOLeafNode.LastUpdate' = (Get-Date); 'AM_CustomProps.AMCoreContentDate' = (& $day 5) }
+    [pscustomobject]@{ 'EPOLeafNode.NodeName' = 'OLD20'; 'EPOLeafNode.LastUpdate' = (Get-Date); 'AM_CustomProps.AMCoreContentDate' = (& $day 20) }
+    [pscustomobject]@{ 'EPOLeafNode.NodeName' = 'NOENS'; 'EPOLeafNode.LastUpdate' = (Get-Date); 'AM_CustomProps.AMCoreContentDate' = $null }
+)
+$cols = Get-HCContentColumns -Rows $rows
+Assert 'signatures: columns (content date preferred over LastUpdate)' { $cols.Name -eq 'EPOLeafNode.NodeName' -and $cols.Date -eq 'AM_CustomProps.AMCoreContentDate' }
+$m = Measure-HCContentFreshness -Rows $rows -MaxAgeDays 3
+Assert 'signatures: date mode totals' { $m.Mode -eq 'Date' -and $m.Total -eq 10 -and $m.NoData -eq 1 }
+Assert 'signatures: outdated, oldest first' { $m.Outdated.Count -eq 3 -and $m.Outdated[0].Name -eq 'OLD20' -and $m.Outdated[0].AgeDays -eq 20 }
+Assert 'signatures: newest content age' { $m.NewestAgeDays -eq 1 }
+Assert 'signatures: boundary (3 days is still current)' { (Measure-HCContentFreshness -Rows @([pscustomobject]@{ 'EPOLeafNode.NodeName' = 'X'; 'AM_CustomProps.AMCoreContentDate' = (& $day 3) }) -MaxAgeDays 3).Outdated.Count -eq 0 }
+
+$vrows = @(
+    1..5 | ForEach-Object { [pscustomobject]@{ 'EPOLeafNode.NodeName' = "S$_"; 'EPOProdPropsView_THREATPREVENTION.verDAT32Major' = '5321.0' } }
+    [pscustomobject]@{ 'EPOLeafNode.NodeName' = 'S6'; 'EPOProdPropsView_THREATPREVENTION.verDAT32Major' = '5319.0' }
+    [pscustomobject]@{ 'EPOLeafNode.NodeName' = 'S7'; 'EPOProdPropsView_THREATPREVENTION.verDAT32Major' = 5310 }
+)
+$vm = Measure-HCContentFreshness -Rows $vrows -MaxAgeDays 3 -MaxVersionsBehind 3
+Assert 'signatures: version mode' { $vm.Mode -eq 'Version' -and $vm.NewestVersion -eq 5321 -and $vm.Total -eq 7 }
+Assert 'signatures: versions behind' { $vm.Outdated.Count -eq 1 -and $vm.Outdated[0].Name -eq 'S7' -and $vm.Outdated[0].Behind -eq 11 }
+Assert 'signatures: VSE datver column' { (Get-HCContentColumns -Rows @([pscustomobject]@{ 'EPOLeafNode.NodeName' = 'A'; 'EPOProdPropsView_VIRUSCAN.datver' = '11023.0000' })).Version -eq 'EPOProdPropsView_VIRUSCAN.datver' }
+Assert 'signatures: no usable column' { (Measure-HCContentFreshness -Rows @([pscustomobject]@{ 'EPOLeafNode.NodeName' = 'A'; 'EPOLeafNode.AgentVersion' = 'x' })).Mode -eq 'None' }
+
+$packages = @(
+    [pscustomobject]@{ productId = 'VSCANDAT1000'; productName = 'DAT'; productVersion = '11023.0000'; packageBranch = 'Current' }
+    [pscustomobject]@{ productId = 'AMCORDAT'; productName = 'AMCore Content Package'; productVersion = '5320.0'; packageBranch = 'Previous' }
+    [pscustomobject]@{ productId = 'AMCORDAT'; productName = 'AMCore Content Package'; productVersion = '5321.0'; packageBranch = 'Current' }
+    [pscustomobject]@{ productId = 'EPOAGENT3000'; productName = 'Trellix Agent'; productVersion = '5.8.1'; packageBranch = 'Current' }
+)
+$pkg = Select-HCContentPackage -Packages $packages
+Assert 'repository: AMCore Current branch preferred' { $pkg.Name -eq 'AMCore content' -and $pkg.Version -eq '5321.0' -and $pkg.Branch -eq 'Current' }
+Assert 'repository: nothing relevant' { $null -eq (Select-HCContentPackage -Packages @([pscustomobject]@{ productId = 'EPOAGENT3000'; productVersion = '5.8' })) }
+
+$ctx = New-HCContext -Target @{ Type = 'TrellixEPO'; Name = 'EPO01'; Address = 'x' }
+$threeDaysAgo = (Get-Date).AddDays(-3)
+$stateSettings = @{ PreviousState = @{ 'TrellixEPO|EPO01' = @{ RepositoryContent = @{ Value = 'AMCore content 5321.0'; Since = $threeDaysAgo.ToString('o') } } } }
+$since = Get-HCValueSince -Context $ctx -Settings $stateSettings -Key 'RepositoryContent' -Value 'AMCore content 5321.0'
+Assert 'state: unchanged value keeps first-seen time' { [math]::Abs(($since - $threeDaysAgo).TotalSeconds) -lt 1 -and $ctx.State.RepositoryContent.Value -eq 'AMCore content 5321.0' }
+$since = Get-HCValueSince -Context $ctx -Settings $stateSettings -Key 'RepositoryContent' -Value 'AMCore content 5322.0'
+Assert 'state: new value starts now' { ((Get-Date) - $since).TotalSeconds -lt 5 }
+$json = [pscustomobject]@{ 'TrellixEPO|EPO01' = [pscustomobject]@{ RepositoryContent = [pscustomobject]@{ Value = 'v1'; Since = '2026-10-10T06:30:00Z' } } }
+Assert 'state: JSON round trip' { (ConvertTo-HCStateTable $json)['TrellixEPO|EPO01'].RepositoryContent.Value -eq 'v1' }
+$prevModel = [pscustomobject]@{ Generated = (Get-Date); Counts = @{}; Issues = @(); Results = @($ctx) }
+$carried = ConvertTo-HCPreviousRun -Model $prevModel -PreviousState @{ 'NetApp|NA1' = @{ X = @{ Value = 'a'; Since = 'b' } } }
+Assert 'state: carried forward when not refreshed' { $carried.State['NetApp|NA1'].X.Value -eq 'a' -and $carried.State['TrellixEPO|EPO01'].RepositoryContent.Value -eq 'AMCore content 5322.0' }
+
 # --------------------------------------------------------------------------------------------- misc
 Assert 'format: list' { (Format-HCList -Items @('a', 'b', 'c', 'd') -Max 2) -eq 'a, b (+2 more)' }
 Assert 'format: bytes' { (Format-HCBytes 1536) -eq '1.5 KB' -and (Format-HCBytes (4.2 * 1TB)) -eq '4.2 TB' }

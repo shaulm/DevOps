@@ -83,6 +83,7 @@ function New-HCContext {
         Certificates  = [System.Collections.Generic.List[object]]::new()
         Licenses      = [System.Collections.Generic.List[object]]::new()
         Log           = [System.Collections.Generic.List[string]]::new()
+        State         = @{}          # values remembered for the next run (see Get-HCValueSince)
         Started       = Get-Date
         DurationSec   = 0
     }

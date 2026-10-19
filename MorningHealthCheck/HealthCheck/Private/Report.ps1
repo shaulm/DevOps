@@ -173,11 +173,24 @@ function New-HCReportModel {
 
 function ConvertTo-HCPreviousRun {
     # What is kept from a run so the next one can mark issues as new / resolved.
-    param([Parameter(Mandatory)]$Model)
+    param([Parameter(Mandatory)]$Model, [hashtable]$PreviousState)
+    # Keep remembered values this run did not refresh (e.g. the ePO API was down today), so
+    # "unchanged since" survives a bad day.
+    $state = @{}
+    if ($PreviousState) { foreach ($k in $PreviousState.Keys) { $state[$k] = $PreviousState[$k] } }
+    foreach ($r in $Model.Results) {
+        if (-not ($r.PSObject.Properties['State'] -and $r.State.Count)) { continue }
+        $key = "$($r.Type)|$($r.Name)"
+        $merged = @{}
+        if ($state[$key] -is [hashtable]) { foreach ($k in $state[$key].Keys) { $merged[$k] = $state[$key][$k] } }
+        foreach ($k in $r.State.Keys) { $merged[$k] = $r.State[$k] }
+        $state[$key] = $merged
+    }
     [pscustomobject]@{
         Generated = $Model.Generated.ToString('o')
         Counts    = $Model.Counts
         Issues    = @($Model.Issues | ForEach-Object { [pscustomobject]@{ Key = $_.Key; Status = $_.Status; System = $_.System; Title = $_.Title; Detail = $_.Detail } })
+        State     = $state
     }
 }
 

@@ -101,7 +101,17 @@
         Juniper           = @{ Credential = 'juniper'; IgnoreAlarms = @('*Rescue configuration is not set*') }
         CheckPoint        = @{ Credential = 'checkpoint' }
         TrellixESM        = @{ Credential = 'trellix-esm'; CheckAlarms = $true }
-        TrellixEPO        = @{ Credential = 'trellix-epo'; Port = 8443 }
+        TrellixEPO        = @{
+            Credential = 'trellix-epo'; Port = 8443
+            # Are the signatures (AMCore content / DAT) up to date - on the systems and in the master repository?
+            Signatures = @{
+                MaxAgeDays           = 3     # content older than this is out of date (ePO's own compliance query uses 7)
+                WarningPct           = 5     # share of managed systems out of date -> Warning
+                CriticalPct          = 15    # ... -> Critical
+                RepositoryMaxAgeDays = 2     # content is released daily: warn when nothing newer arrived for this long
+                # QueryId            = 456   # only if the automatic detection reports Unknown - see README
+            }
+        }
         TrellixEDR        = @{ }
     }
 
@@ -165,7 +175,7 @@
             Type         = 'TrellixEPO'; Name = 'EPO01'; Address = 'epo01.contoso.local'
             SavedQueries = @(
                 # Any ePO query you saved (Menu > Queries & Reports, the ID is in the URL). Alerts on the row count.
-                # @{ Id = 123; Name = 'Systems with AMCore content older than 3 days'; WarningAbove = 25; CriticalAbove = 100 }
+                # @{ Id = 123; Name = 'Systems without Endpoint Security installed'; WarningAbove = 0; CriticalAbove = 25 }
             )
             Licenses     = @( @{ Name = 'Trellix Endpoint Security'; Expires = '2027-01-31'; Usage = '1,600 nodes' } )
         }

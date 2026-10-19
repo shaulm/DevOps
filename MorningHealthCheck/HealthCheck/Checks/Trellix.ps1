@@ -6,6 +6,7 @@
 #   Certificates  : console certificate
 # TrellixEPO (ePolicy Orchestrator)
 #   Functionality : console, Web API (remote commands), managed systems not seen for N days,
+#                   signatures up to date (AMCore / DAT content - see TrellixSignatures.ps1),
 #                   your own saved queries with thresholds, ePO Windows services and disks
 #   Certificates  : console (8443) + agent handler ports, optional LocalMachine\My
 # TrellixEDR
@@ -161,6 +162,9 @@ function Invoke-HCCheckTrellixEPO {
             } catch {
                 Add-HCCheck $Context 'Agent communication' 'Unknown' (Get-HCErrorText $_)
             }
+        }
+        if ($apiOk -and $Target.CheckSignatures -ne $false) {
+            Test-HCEpoSignatures -Context $Context -Target $Target -Epo $epo -Settings $Settings
         }
         if ($apiOk) {
             foreach ($q in @($Target.SavedQueries)) {

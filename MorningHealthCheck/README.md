@@ -33,7 +33,7 @@ Run `.\Invoke-MorningHealthCheck.ps1 -Demo -NoEmail -Open` to see the report wit
 | **Juniper switches** (`Juniper`) | Chassis and system alarms, PSU/fan/temperature, Virtual Chassis members, file-system usage, overnight configuration commits | Junos PKI local certificates (certificate identifier = friendly name), optional J-Web certificate | `show system license`: features used without a license, expiring licenses | SSH (Posh-SSH) |
 | **Check Point cluster** (`CheckPoint`) | Management API, ClusterXL member states and PNOTEs, installed policy and install time, disk usage, optional management-server processes | Management server and each member's Gaia portal certificate | `cplic print` on every member: license expiry and service contracts (blade subscriptions) | Management API (R80.10+) and `run-script` |
 | **Trellix SIEM** (`TrellixESM`) | REST API login, ESM clock, unacknowledged alarms of the last 24 h | Console certificate | Support/subscription date from the config (*) | ESM API v2 |
-| **Trellix ePO** (`TrellixEPO`) | Web API, managed systems not seen for N days, your own saved queries with thresholds (for example "AMCore content older than 3 days"), ePO services, disk space | Console (8443) and agent-handler (443) certificates | Subscription date from the config (*) | ePO Web API, CIM/WinRM |
+| **Trellix ePO** (`TrellixEPO`) | Web API, managed systems not seen for N days, **signatures up to date**: share of systems with AMCore/DAT content older than N days (oldest named), newest content in use, content in the master repository still changing (see below). Also your own saved queries with thresholds, ePO services, disk space | Console (8443) and agent-handler (443) certificates | Subscription date from the config (*) | ePO Web API, CIM/WinRM |
 | **Trellix EDR** (`TrellixEDR`) | Console reachable and responding (on-prem or SaaS URL) | Console certificate | Subscription date from the config (*) | HTTPS |
 | Anything else (`WindowsServer`, `WebService`) | Services, disks, activation / URL, status code, keyword | Store / served certificate | Windows activation / from config | CIM/WinRM, HTTPS |
 
@@ -84,7 +84,7 @@ Use a dedicated account, for example `CONTOSO\svc-healthcheck`, with these right
 | vCenter | SSO user with the global **Read-only** role. Appliance health and file-based backup status come from the appliance (VAMI) API and may need an account with appliance rights; without them those two rows show *Unknown*. |
 | Check Point | Administrator with a read-only permission profile that also allows **Run One Time Script** (needed for `run-script`). An API key works too: store it with user name `api-key`. |
 | Juniper | `set system login user svc-healthcheck class read-only` |
-| Trellix ePO | ePO user that can view the System Tree and run the saved queries you list (share them with the user). |
+| Trellix ePO | ePO user that can view the System Tree, product properties and the master repository, and run the saved queries you list (share them with the user). |
 | Trellix ESM | ESM user with read-only rights and API access. |
 | Forcepoint proxy | Allowed to browse the test URLs (the check authenticates as the task account when `UseDefaultCredentials = $true`). |
 | Portnox (RADIUS test) | Add the management server as a RADIUS client in Portnox and store the shared secret (see the config). |
@@ -215,6 +215,43 @@ mailbox fits your security policy. `ShowAddresses = $false` in the Email section
 
 ---
 
+## Signatures in ePO (AMCore / DAT content)
+
+Every morning the ePO check answers two questions.
+
+**Do the managed systems have current signatures?** The check reads the content date of every system
+(ENS *AMCore Content Date*). Systems with content older than `MaxAgeDays` (default 3) are out of date.
+Their share of all systems that report content sets the status: `WarningPct` 5 %, `CriticalPct` 15 %.
+The row names the oldest systems, for example
+`109 of 1,532 systems (7.1%) have content older than 3 days; oldest: LAB-PC07 (19 d), KIOSK-02 (12 d), ...`.
+For legacy VirusScan the DAT version is used instead (out of date = more than `MaxVersionsBehind` versions
+behind the newest one in use).
+
+**Is ePO itself still getting new content from Trellix?** AMCore content is released daily, so the check
+warns when:
+* even the newest content on *any* system is older than `RepositoryMaxAgeDays` (default 2), or
+* the AMCore/DAT package in the master repository has not changed for `RepositoryMaxAgeDays`. The script
+  remembers between runs when it first saw each version, so this needs a couple of daily runs to become meaningful.
+
+Either one usually means the repository pull server task is failing, or ePO lost its route to Trellix.
+
+The per-system data is read automatically. The check tries the ePO properties for Endpoint Security
+(`AM_CustomProps.AMCoreContentDate`, then `EPOProdPropsView_THREATPREVENTION.verDAT32Major`) and then
+VirusScan (`EPOProdPropsView_VIRUSCAN.datver`). If your ePO names them differently, the row shows **Unknown**.
+In that case, give it a saved query instead:
+
+1. In ePO: *Menu > Reporting > Queries & Reports > New Query*, result type **Managed Systems**, chart **Table**.
+2. Columns: **System Name** and **AMCore Content Date** (Endpoint Security Threat Prevention properties). For
+   VirusScan use **DAT Version**. Don't add a filter; the script works out the age itself.
+3. Save the query and share it with the API user. Note its ID: it is in the query's URL, or list all
+   queries with `https://<epo>:8443/remote/core.listQueries`.
+4. Set `Signatures = @{ QueryId = <id> }` on the ePO target.
+
+ePO's default *AMCore Content Compliance* query treats content up to 7 days old as compliant. Set
+`MaxAgeDays = 7` if you want the report to agree with that dashboard.
+
+---
+
 ## Configuration reference
 
 All thresholds are in the `Thresholds` section of the config (defaults shown in the example).
@@ -236,7 +273,8 @@ Options per target type (put them on a target, or under `Defaults.<Type>` for al
 | `Radius = @{ SecretCredential; Credential; Port; ExpectAccept; Servers }` | Portnox | Real RADIUS Access-Request. Any answer proves the service works; with `ExpectAccept` the test user must be accepted. |
 | `SshPort`, `KeyFile`, `HttpsPort`, `IgnoreAlarms`, `CheckEnvironment`, `CheckVirtualChassis`, `CheckStorage`, `CheckPkiCertificates` | Juniper | |
 | `Members = @( @{ Name; Address; PortalPort } )`, `ManagementObjectName`, `Domain` | CheckPoint | Member names as in SmartConsole |
-| `SavedQueries = @( @{ Id; Name; WarningAbove; CriticalAbove } )`, `CheckAgents` | TrellixEPO | Alerts on the number of rows a saved query returns |
+| `Signatures = @{ MaxAgeDays; WarningPct; CriticalPct; RepositoryMaxAgeDays; MaxVersionsBehind; QueryId; ShowOldest; CheckRepository; Enabled }` | TrellixEPO | Signature checks, see *Signatures in ePO* |
+| `SavedQueries = @( @{ Id; Name; WarningAbove; CriticalAbove } )`, `CheckAgents`, `CheckSignatures` | TrellixEPO | Alerts on the number of rows a saved query returns |
 | `CheckAlarms`, `AlarmWarningCount` | TrellixESM | |
 | `Url`, `Keyword`, `ExpectedStatus` | TrellixEDR, WebService | |
 

@@ -165,3 +165,40 @@ function Add-HCMissingCredentialCheck {
         Add-HCCheck $Context $Name 'Unknown' 'No credential configured for this target (set Credential in the config)'
     }
 }
+
+function Get-HCValueSince {
+    <#
+      Returns when a value was first seen for this target and remembers it for the next run.
+      Used to notice things that should change regularly but did not (e.g. the content version in
+      the ePO master repository). The first time a value is seen the answer is "now".
+    #>
+    param([Parameter(Mandatory)]$Context, [Parameter(Mandatory)][hashtable]$Settings, [Parameter(Mandatory)][string]$Key, [string]$Value)
+    $since = Get-Date
+    $previous = $null
+    if ($Settings.PreviousState) {
+        $targetState = $Settings.PreviousState["$($Context.Type)|$($Context.Name)"]
+        if ($targetState) { $previous = $targetState[$Key] }
+    }
+    if ($previous -and [string]$previous.Value -eq $Value) {
+        $seen = ConvertTo-HCDateTime $previous.Since
+        if ($seen -and $seen -lt $since) { $since = $seen }
+    }
+    $Context.State[$Key] = @{ Value = $Value; Since = $since.ToString('o') }
+    return $since
+}
+
+function ConvertTo-HCStateTable {
+    # Previous-run state (as read back from JSON) -> nested hashtables.
+    param($State)
+    $result = @{}
+    if (-not $State) { return $result }
+    if ($State -is [hashtable]) { return $State }
+    foreach ($target in $State.PSObject.Properties) {
+        $entries = @{}
+        foreach ($entry in $target.Value.PSObject.Properties) {
+            $entries[$entry.Name] = @{ Value = $entry.Value.Value; Since = $entry.Value.Since }
+        }
+        $result[$target.Name] = $entries
+    }
+    return $result
+}
